@@ -269,12 +269,95 @@
     color: rgba(140,200,255,0.6); letter-spacing: 0.1em;
     text-shadow: 0 1px 4px rgba(0,0,60,0.4);
   }
+
+  /* ── INTRO OVERLAY ── */
+  .intro-overlay {
+    position: fixed; inset: 0;
+    z-index: 300;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+    /* starts visible, fades out */
+  }
+
+  .intro-card {
+    position: relative;
+    text-align: center;
+    padding: 0 32px;
+    margin-bottom: 30vh;
+    animation: introAnim 7.5s ease forwards;
+  }
+
+  /* Decorative soft glow ring */
+  .intro-card::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 260px; height: 260px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(100,190,255,0.13) 0%, transparent 70%);
+    pointer-events: none;
+    animation: glowPulse 2.5s ease-in-out infinite;
+  }
+
+  .intro-line {
+    display: block;
+    font-family: 'Noto Serif SC', serif;
+    font-weight: 300;
+    font-size: 1.1rem;
+    color: rgba(220, 240, 255, 0.92);
+    letter-spacing: 0.25em;
+    line-height: 2.4;
+    text-shadow: 0 0 24px rgba(100,200,255,0.5), 0 2px 6px rgba(0,30,80,0.4);
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  .intro-line-1 { animation: lineReveal 0.7s 0.3s ease forwards; }
+  .intro-line-2 { animation: lineReveal 0.7s 0.7s ease forwards; }
+  .intro-line-3 { animation: lineReveal 0.7s 1.1s ease forwards; }
+
+  /* Thin decorative divider */
+  .intro-divider {
+    display: block;
+    width: 40px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(140,210,255,0.6), transparent);
+    margin: 4px auto 0;
+    opacity: 0;
+    animation: lineReveal 0.5s 0.5s ease forwards;
+  }
+
+  @keyframes lineReveal {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes introAnim {
+    0%   { opacity: 1; }
+    75%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  @keyframes glowPulse {
+    0%, 100% { transform: translate(-50%, -50%) scale(1);   opacity: 0.7; }
+    50%       { transform: translate(-50%, -50%) scale(1.12); opacity: 1; }
+  }
 </style>
 </head>
 <body>
 
 <!-- Sky layer -->
 <div class="sky-clouds" id="skyClouds"></div>
+
+<!-- INTRO OVERLAY -->
+<div class="intro-overlay" id="introOverlay">
+  <div class="intro-card">
+    <span class="intro-line intro-line-1" id="introLine1">觉察此刻升起的欲望</span>
+    <span class="intro-divider"></span>
+    <span class="intro-line intro-line-2" id="introLine2">点击水中飘动的泡泡</span>
+    <span class="intro-line intro-line-3" id="introLine3">识别即是释放</span>
+  </div>
+</div>
 
 <!-- Underwater light rays -->
 <div class="underwater-rays" id="uwRays"></div>
@@ -305,11 +388,9 @@
 <!-- Bubble scene layer -->
 <div class="scene" id="scene"></div>
 
-<!-- Single shared decision button pair -->
-<button class="surf-btn surf-deny"  id="sharedDeny"  onclick="handleDecision(false)" style="z-index:16;position:fixed;">不允许</button>
-<button class="surf-btn surf-allow" id="sharedAllow" onclick="handleDecision(true)"  style="z-index:16;position:fixed;">允许</button>
+<!-- Decision buttons removed — bubbles auto-release on arrival -->
 
-<div class="instruction" id="instr">点击水下的欲望泡泡，让它浮上水面（最多同时3个）</div>
+<div class="instruction" id="instr">识别现在是哪种想要，点击允许释放</div>
 <div class="counter"     id="counter">已释放 0 个欲望</div>
 <div class="toast"       id="toast"></div>
 
@@ -318,9 +399,9 @@
 //  CONFIG
 // ═══════════════════════════════════════════════════
 const DESIRES = [
-  { key:'control',  label:'想要\n控制', labelEn:'Wanting\nControl',  cls:'bc' },
-  { key:'approval', label:'想要\n认同', labelEn:'Wanting\nApproval', cls:'ba' },
-  { key:'safety',   label:'想要\n安全', labelEn:'Wanting\nSecurity', cls:'bs' },
+  { key:'control',  label:'想要\n控制', cls:'bc' },
+  { key:'approval', label:'想要\n认同', cls:'ba' },
+  { key:'safety',   label:'想要\n安全', cls:'bs' },
 ];
 const SPAWN_GAP   = 200;
 const RISE_SPEED  = 240;   // px/s
@@ -491,9 +572,19 @@ function surfaceSlotPos(slotIdx) {
 //  SURFACE MERGE BUBBLE
 //  All at-surface bubbles collapse into one merged bubble
 // ═══════════════════════════════════════════════════
-let mergedBubble = null; // { el, desires[], sz }
+let mergedBubble = null;
+let mergeTimer = null;
+let releasing = false; // lock: ignore tryMerge while animation is in flight
 
 function tryMerge() {
+  if (releasing) return; // don't re-trigger while a release is animating
+  if (mergeTimer) clearTimeout(mergeTimer);
+  mergeTimer = setTimeout(_doMerge, 80);
+}
+
+function _doMerge() {
+  mergeTimer = null;
+  if (releasing) return;
   // Collect all at-surface slot entries
   const atSurface = risingSlots
     .map((s, i) => s && s.el.classList.contains('at-surface') ? { ...s, idx: i } : null)
@@ -519,7 +610,7 @@ function tryMerge() {
 
   // Build label: deduplicate and join
   const seen = new Set();
-  const lines = desires.map(d => (pageLang === 'en' ? d.labelEn : d.label).replace('\n', '')).filter(l => !seen.has(l) && seen.add(l));
+  const lines = desires.map(d => d.label.replace('\n', '')).filter(l => !seen.has(l) && seen.add(l));
   const labelHtml = lines.join('<br>');
 
   // Color: mix classes
@@ -549,8 +640,8 @@ function tryMerge() {
 
   mergedBubble = { el, desires, sz: mSz, atSurface };
 
-  // Show shared buttons flanking the merged bubble
-  updateSharedButtons(cx, cy, mSz);
+  // Auto-release immediately
+  handleDecision(true);
 }
 
 function updateSharedButtons(cx, cy, sz) {
@@ -684,9 +775,8 @@ function spawnIdleBubble(desireOverride) {
   const initTop  = Math.max(waterY(), pos.py - sz/2);
 
   const el = document.createElement('div');
-  el.className = `bubble bubble-desire ${desire.cls} idle`;
-  el.dataset.key = desire.key;
-  el.innerHTML = desire[pageLang === 'en' ? 'labelEn' : 'label'].replace('\n', '<br>');
+  el.className = `bubble ${desire.cls} idle`;
+  el.innerHTML = desire.label.replace('\n', '<br>');
   el.style.cssText = `
     width:${sz}px; height:${sz}px;
     left:${initLeft}px; top:${initTop}px;
@@ -712,66 +802,48 @@ function spawnIdleBubble(desireOverride) {
 }
 
 // ═══════════════════════════════════════════════════
-//  CLICK → RISE TO SURFACE
+//  CLICK → FLY DIRECTLY TO SKY
 // ═══════════════════════════════════════════════════
 function onBubbleClick(entry) {
   if (entry.clicked) return;
   entry.clicked = true;
 
-  const slotIdx = risingSlots.findIndex(s => s === null);
-  if (slotIdx === -1) {
-    entry.clicked = false;
-    showToast('最多同时觉察 3 个欲望');
-    return;
-  }
-
   idleBubbles = idleBubbles.filter(b => b !== entry);
+  entry.physicsActive = false;
 
   const { el, desire, sz } = entry;
-  entry.physicsActive = false;
-  idleBubbles = idleBubbles.filter(b => b !== entry);
 
-  // Resolve current position (physics uses transform offset from initLeft/initTop)
-  const curLeft = entry.initLeft + (entry.px - entry.sz/2 - entry.initLeft);
-  const curTop  = entry.initTop  + (entry.py - entry.sz/2 - entry.initTop);
-
-  // Switch to absolute positioning, clear transform
+  // Fix position from physics coordinates
   el.style.transition = 'none';
   el.style.transform  = 'none';
   el.style.left = `${entry.px - sz/2}px`;
   el.style.top  = `${entry.py - sz/2}px`;
-
-  el.classList.remove('idle');
-  el.classList.add('rising');
-  el.style.animation    = 'none';
   el.style.pointerEvents = 'none';
+  el.style.cursor = 'default';
+  // Keep idle class so bubble background/border stays visible
+  // just remove hover effects
+  el.style.filter = 'none';
 
-  const tSz    = TSZ;
-  const target = surfaceSlotPos(slotIdx);
-  const cLeft  = entry.px - sz / 2;
-  const cTop   = entry.py - sz / 2;
-  const dist   = Math.hypot(target.x - cLeft, target.y - cTop);
-  const dur    = Math.max(0.7, dist / RISE_SPEED);
+  const label = desire.label.replace('\n', '');
+  showToast(STRINGS_S2[s2Lang].toast_release.replace('{label}', label));
 
-  el.style.transition = `left ${dur.toFixed(2)}s cubic-bezier(0.3,1.2,0.6,1), top ${dur.toFixed(2)}s cubic-bezier(0.3,1.2,0.6,1), width ${dur.toFixed(2)}s ease, height ${dur.toFixed(2)}s ease`;
-  el.style.left   = `${target.x - tSz/2}px`;
-  el.style.top    = `${target.y - tSz/2}px`;
-  el.style.width  = `${tSz}px`;
-  el.style.height = `${tSz}px`;
-  el.style.zIndex = '14';
+  // Fly to sky via JS transition
+  const currentTop = entry.py - sz/2;
+  el.style.zIndex = '18';
 
-  const slotEntry = { el, desire, slotIdx, tSz };
-  risingSlots[slotIdx] = slotEntry;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    el.style.transition = 'top 1.9s cubic-bezier(0.22,0.58,0.38,0.96), opacity 1.9s ease';
+    el.style.top     = `${currentTop - 600}px`;
+    el.style.opacity = '0';
+  }));
 
   setTimeout(() => {
-    el.classList.remove('rising');
-    el.classList.add('at-surface');
-    el.style.transition = '';
-    tryMerge(); // merge all at-surface into one bubble
+    el.remove();
+    released++;
+    document.getElementById('counter').textContent = STRINGS_S2[s2Lang].counter.replace('{n}', released);
+    setTimeout(() => spawnIdleBubble(desire), 800);
     updateInstruction();
-  }, dur * 1000 + 60);
-
-
+  }, 1950);
 }
 
 // ═══════════════════════════════════════════════════
@@ -779,34 +851,42 @@ function onBubbleClick(entry) {
 // ═══════════════════════════════════════════════════
 function handleDecision(allow) {
   if (!mergedBubble) return;
+  releasing = true;
 
-  document.getElementById('sharedDeny').classList.remove('show');
-  document.getElementById('sharedAllow').classList.remove('show');
-
-  const labels = [...new Set(mergedBubble.desires.map(d => (pageLang === 'en' ? d.labelEn : d.label).replace('\n', '')))].join(pageLang === 'en' ? ', ' : '、');
-  showToast(allow
-    ? (pageLang === 'en' ? `🌸 You allowed 「${labels}」to leave` : `🌸 你允许「${labels}」离开了`)
-    : (pageLang === 'en' ? `✨ Even without allowing, they quietly dissolved` : `✨ 即使不允许，它们也悄然离去了`));
+  const labels = [...new Set(mergedBubble.desires.map(d => d.label.replace('\n', '')))].join('、');
+  showToast(`🌸 「${labels}」已悄然离去`);
 
   // Fly merged bubble into sky
   const el = mergedBubble.el;
   el.style.transition = 'none';
   el.classList.add('go-sky');
 
-  // Remove all individual hidden slot bubbles too
+  // Clear slots immediately so new bubbles can be clicked
   const atSurface = mergedBubble.atSurface;
   mergedBubble = null;
+  for (const e of atSurface) {
+    risingSlots[e.idx] = null;
+  }
 
   setTimeout(() => {
     el.remove();
     for (const e of atSurface) {
       e.el.remove();
-      risingSlots[e.idx] = null;
       released++;
-      // Spawn replacement bubble of the same desire type
       setTimeout(() => spawnIdleBubble(e.desire), 800);
     }
-    document.getElementById('counter').textContent = `已释放 ${released} 个欲望`;
+    // Safety: clean up any orphaned at-surface bubbles
+    for (let i = 0; i < risingSlots.length; i++) {
+      const s = risingSlots[i];
+      if (s && s.el.classList.contains('at-surface')) {
+        s.el.remove();
+        risingSlots[i] = null;
+        released++;
+        setTimeout(() => spawnIdleBubble(s.desire), 800);
+      }
+    }
+    document.getElementById('counter').textContent = STRINGS_S2[s2Lang].counter.replace('{n}', released);
+    releasing = false;
     updateInstruction();
   }, 1950);
 }
@@ -818,11 +898,11 @@ function updateInstruction() {
   const active = risingSlots.filter(Boolean).length;
   const atSurf = risingSlots.filter(s => s && s.el.classList.contains('at-surface')).length;
   if (active === 0) {
-    document.getElementById('instr').textContent = '点击水下的欲望泡泡，让它浮上水面（最多同时3个）';
+    document.getElementById('instr').textContent = STRINGS_S2[s2Lang].instr_idle;
   } else if (atSurf > 0) {
-    document.getElementById('instr').textContent = '选择允许或不允许这个欲望离开';
+    document.getElementById('instr').textContent = STRINGS_S2[s2Lang].instr_float;
   } else {
-    document.getElementById('instr').textContent = `${active} 个欲望正在上浮……`;
+    document.getElementById('instr').textContent = STRINGS_S2[s2Lang].instr_rising.replace('{n}', active);
   }
 }
 
@@ -839,6 +919,12 @@ function showToast(msg) {
 //  INIT
 // ═══════════════════════════════════════════════════
 window.addEventListener('load', () => {
+  // Remove intro overlay after animation finishes
+  const introEl = document.getElementById('introOverlay');
+  if (introEl) {
+    setTimeout(() => { introEl.remove(); }, 7700);
+  }
+
   positionLabels();
   drawWaves();
 
@@ -889,34 +975,65 @@ window.addEventListener('load', () => {
 
 window.addEventListener('resize', positionLabels);
 
-let pageLang = localStorage.getItem('fr-lang') || 'zh';
-
-function applyPageLang(lang) {
-  pageLang = lang;
-  // Zone labels
-  var labelC = document.getElementById('labelC');
-  var labelS = document.getElementById('labelS');
-  if (labelC) labelC.textContent = lang === 'en' ? 'Conscious' : '表意识';
-  if (labelS) labelS.textContent = lang === 'en' ? 'Subconscious' : '潜意识';
-  // Buttons
-  var btnAllow = document.getElementById('sharedAllow');
-  var btnDeny  = document.getElementById('sharedDeny');
-  if (btnAllow) btnAllow.textContent = lang === 'en' ? 'Allow' : '允许';
-  if (btnDeny)  btnDeny.textContent  = lang === 'en' ? 'Not yet' : '不允许';
-  // Max-toast message (if visible — just re-render on next trigger)
-  // Redraw all visible desire bubble labels
-  document.querySelectorAll('.bubble-desire').forEach(function(el) {
-    var key = el.dataset.key;
-    if (!key) return;
-    var d = DESIRES.find(function(x){ return x.key === key; });
-    if (d) el.innerHTML = (lang === 'en' ? d.labelEn : d.label).replace('\n', '<br>');
-  });
+// ── i18n ──
+const STRINGS_S2 = {
+  zh: {
+    title: '圣多纳释放法',
+    subtitle: '觉察 · 允许 · 释放',
+    d_control: '想要\n控制', d_approval: '想要\n认同', d_safety: '想要\n安全',
+    instr_idle: '识别现在是哪种想要，点击允许释放',
+    instr_rising: '{n} 个欲望正在上浮……',
+    instr_float: '欲望正在飘离……',
+    counter: '已释放 {n} 个欲望',
+    toast_release: '🌸 「{label}」已悄然离去',
+    label_c: '表意识', label_s: '潜意识',
+    intro1: '觉察此刻升起的欲望', intro2: '点击水中飘动的泡泡', intro3: '识别即是释放',
+  },
+  en: {
+    title: 'Sedona Method',
+    subtitle: 'Notice · Allow · Release',
+    d_control: 'Control', d_approval: 'Approval', d_safety: 'Security',
+    instr_idle: 'Identify your desire — tap to release',
+    instr_rising: '{n} desires rising…',
+    instr_float: 'Desire drifting away…',
+    counter: '{n} desires released',
+    toast_release: '🌸 「{label}」has quietly dissolved',
+    label_c: 'Conscious', label_s: 'Subconscious',
+    intro1: 'Notice the desire arising now', intro2: 'Tap the bubble floating by', intro3: 'Recognition is release',
+  }
+};
+let s2Lang = 'zh';
+function s2ApplyLang(lang) {
+  s2Lang = lang;
+  var L = STRINGS_S2[lang];
+  var h1 = document.querySelector('.header h1');
+  if (h1) h1.textContent = L.title;
+  var p = document.querySelector('.header p');
+  if (p) p.textContent = L.subtitle;
+  var title = document.querySelector('title');
+  if (title) title.textContent = lang === 'en' ? 'Sedona Method · Inner Healing' : '圣多纳释放法 · 内心疗愈';
+  DESIRES[0].label = L.d_control;
+  DESIRES[1].label = L.d_approval;
+  DESIRES[2].label = L.d_safety;
+  document.getElementById('instr').textContent = L.instr_idle;
+  document.getElementById('counter').textContent = L.counter.replace('{n}', released);
+  var lc = document.getElementById('labelC');
+  if (lc) lc.textContent = L.label_c;
+  var ls = document.getElementById('labelS');
+  if (ls) ls.textContent = L.label_s;
+  // Intro overlay
+  var il1 = document.getElementById('introLine1');
+  if (il1) il1.textContent = L.intro1;
+  var il2 = document.getElementById('introLine2');
+  if (il2) il2.textContent = L.intro2;
+  var il3 = document.getElementById('introLine3');
+  if (il3) il3.textContent = L.intro3;
 }
-
 document.addEventListener('fr-lang-change', function(e) {
-  applyPageLang(e.detail);
+  s2ApplyLang(e.detail);
 });
-applyPageLang(pageLang);
+s2ApplyLang(localStorage.getItem('fr-lang') || 'zh');
+
 </script>
 <script src="/sidebar.js"></script>
 </body>
